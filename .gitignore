@@ -1,0 +1,6 @@
+output/*
+tmp/*
+Cursor.md
+.env
+venv
+data/*

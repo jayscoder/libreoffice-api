@@ -1,0 +1,28 @@
+services:
+  libreoffice-api:
+    image: libreoffice-api:latest
+    container_name: libreoffice-api
+    restart: unless-stopped
+    ports:
+      - "15000:15000"
+      - "15001:3000"
+      - "15002:3001"
+    environment:
+      - DEBUG=true
+      - MAX_CONTENT_LENGTH=104857600
+      - SOFFICE_PATH=soffice
+      - FILE_EXPIRY_HOURS=24
+    volumes:
+      - libreoffice_tmp:/app/tmp
+      - libreoffice_data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:15000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+volumes:
+  libreoffice_tmp:
+    driver: local
+  libreoffice_data:
+    driver: local
