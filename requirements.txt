@@ -1,5 +1,0 @@
-flask
-werkzeug
-flasgger
-python-dotenv
-PyPDF2

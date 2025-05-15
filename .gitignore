@@ -4,3 +4,4 @@ Cursor.md
 .env
 venv
 data/*
+upload_to_oss.sh

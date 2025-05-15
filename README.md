@@ -1,140 +1,94 @@
 # LibreOffice 文档转换 API
 
-这是一个基于 Flask 和 LibreOffice 的文档转换 API 服务，可以将各种格式的文档转换为其他格式，如 TXT、PDF、DOCX 等。
+这是一个基于 Go 和 LibreOffice 的文档转换 API 服务，可以将各种格式的文档转换为其他格式，如 TXT、PDF、DOCX 等。
 
 ## 功能特点
 
-- 支持多种文档格式的转换（DOC, DOCX, XLS, XLSX, PPT, PPTX, PDF 等）
+- 支持多种文档格式的转换（DOC, DOCX, WPS, TXT, HTML, XML, PDF 等）
 - 基于 LibreOffice 的强大转换功能
 - 文档转换后提供下载链接
 - 支持配置文件保存期限，自动清理过期文件
-- RESTful API 设计，支持 Swagger 文档
 
-## 系统要求
+## 环境变量配置
 
-- Python 3.6+
-- LibreOffice 安装并可从命令行访问
-- 足够的存储空间用于保存转换后的文档
+服务支持通过环境变量进行配置，支持的环境变量包括：
 
-## 安装与配置
+| 环境变量           | 说明                                | 默认值            |
+| ------------------ | ----------------------------------- | ----------------- |
+| DEBUG              | 是否开启调试模式                    | true              |
+| SOFFICE_PATH       | LibreOffice 安装路径                | soffice           |
+| MAX_CONTENT_LENGTH | 最大上传文件大小(字节)              | 104857600 (100MB) |
+| FILE_EXPIRY_HOURS  | 文件过期时间(小时)，-1 表示永不过期 | 24                |
+| PORT               | 服务端口                            | 15000             |
 
-### 安装依赖项
+可以通过以下方式配置环境变量：
 
-```bash
-# 安装 LibreOffice（以 Ubuntu 为例）
-sudo apt-get update
-sudo apt-get install -y libreoffice
+1. 在项目根目录创建`.env`文件（推荐，项目提供了`env.sample`作为模板）
+2. 直接在命令行设置环境变量，例如：`PORT=8080 DEBUG=false ./libreoffice-api`
+3. 在 Docker Compose 配置文件中设置
 
-# 安装 Python 依赖
-pip install -r requirements.txt
-```
+## 构建和运行
 
-### 环境变量配置
-
-创建 `.env` 文件，设置以下环境变量：
-
-```
-DEBUG=True                 # 是否启用调试模式
-MAX_CONTENT_LENGTH=104857600  # 允许上传的最大文件大小（字节），默认 100MB
-SOFFICE_PATH=soffice        # LibreOffice 可执行文件路径
-DATA_DIR=data               # 文档存储目录
-FILE_EXPIRY_HOURS=24        # 文件过期时间（小时），设置为 -1 或留空表示永不过期
-```
-
-## 使用方法
-
-### 启动服务
+### Linux 版本构建 (Docker)
 
 ```bash
-python api.py
+# 构建 amd64 版本
+./build.sh amd64
+
+# 构建 arm64 版本
+./build.sh arm64
 ```
 
-服务默认在 `http://localhost:15000` 上运行。
-
-### API 接口说明
-
-#### 1. 文档转换 API
-
-**接口**：`POST /convert`
-
-**请求参数**：
-
-- `file`：要转换的文件（multipart/form-data）
-- `format`：转换目标格式，默认为 `txt:Text`
-
-**支持的格式**：
-
-- 文本格式：`txt:Text`
-- PDF 格式：`pdf:writer_pdf_Export`
-- Word 格式：`docx:Office Open XML Text`
-- Excel 格式：`xlsx:Calc Office Open XML`
-- HTML 格式：`html:HTML (StarWriter)`
-- 更多格式参考 LibreOffice 文档
-
-**响应示例**：
-
-```json
-{
-  "success": true,
-  "filename": "原始文件名.docx",
-  "download_url": "http://localhost:15000/download/20231201/文件名_1701410000000.pdf",
-  "expiry": "2023-12-02 10:00:00"
-}
-```
-
-#### 2. 文件下载 API
-
-**接口**：`GET /download/<path:filename>`
-
-**响应**：转换后的文件内容
-
-#### 3. 健康检查 API
-
-**接口**：`GET /health`
-
-**响应示例**：
-
-```json
-{
-  "status": "healthy",
-  "libreoffice": true,
-  "version": "LibreOffice 7.5.3",
-  "data_dir": "/app/data",
-  "file_expiry_hours": 24
-}
-```
-
-## 测试脚本
-
-项目附带了一个测试脚本 `test.sh`，可以批量测试转换功能：
+### Linux 版本构建 (不使用 Docker)
 
 ```bash
-# 赋予执行权限
-chmod +x test.sh
+# 使用新脚本构建 Linux 版本
+./build_go_linux.sh amd64  # 构建 amd64 版本
+./build_go_linux.sh arm64  # 构建 arm64 版本
 
-# 执行测试
-./test.sh
+# 或使用旧脚本
+./build_go.sh amd64  # 构建 amd64 版本
+./build_go.sh arm64  # 构建 arm64 版本
 ```
 
-测试脚本会将 `data/` 目录中的所有文件转换为多种格式，并将结果保存到 `output/` 目录。
+### MacOS 版本构建
 
-## 文件存储结构
-
-转换后的文件会保存在以下格式的目录中：
-
-```
-DATA_DIR/yyyymmdd/[原始文件名]_[时间戳].[扩展名]
+```bash
+# 使用新脚本构建 MacOS 版本
+./build_go_mac.sh arm64  # 适用于 M1/M2 芯片的 Mac
+./build_go_mac.sh amd64  # 适用于 Intel 芯片的 Mac
 ```
 
-例如：
+### Windows 版本构建
 
+```bash
+# 在 Linux/MacOS 上交叉编译 Windows 版本
+./build_go_windows.sh amd64  # 构建 Windows x64 版本
+./build_go_windows.sh 386    # 构建 Windows x86 版本
 ```
-data/20231201/example_1701410000000.pdf
+
+### 运行
+
+```bash
+# 首先复制环境变量模板
+cp env.sample .env
+# 根据需要修改.env文件
+
+# Linux 版本运行
+./output/libreoffice-api-linux-amd64  # 或 libreoffice-api-linux-arm64
+
+# MacOS 版本运行
+./output/libreoffice-api-macos-arm64  # M1/M2 Mac
+./output/libreoffice-api-macos-amd64  # Intel Mac
+
+# Windows 版本运行
+output\libreoffice-api-windows-amd64.exe  # Windows x64
+output\libreoffice-api-windows-386.exe    # Windows x86
 ```
 
 ## 注意事项
 
-1. 文件会在指定的过期时间后自动删除，除非设置为永不过期
-2. 服务需要足够的磁盘空间用于存储转换后的文件
-3. 较大文件的转换可能需要更多时间
-4. 确保 LibreOffice 正确安装并可通过命令行访问
+1. 确保系统已安装 LibreOffice，否则转换功能将无法使用
+2. MacOS 上运行可能需要安装 LibreOffice 并正确设置 SOFFICE_PATH 环境变量
+3. 在不同操作系统之间构建的二进制文件不能互相运行（例如，Linux 版本不能在 MacOS 上运行，反之亦然）
+4. Windows 版本需要在 Windows 环境中运行，并确保 LibreOffice 已安装并添加到系统路径中

@@ -1,0 +1,31 @@
+# 使用LibreOffice作为基础镜像
+FROM docker-0.unsee.tech/linuxserver/libreoffice
+
+# 设置 Alpine Linux 使用国内镜像源
+RUN echo "http://mirrors.aliyun.com/alpine/v$(cut -d'.' -f1,2 /etc/alpine-release)/main/" > /etc/apk/repositories && \
+    echo "http://mirrors.aliyun.com/alpine/v$(cut -d'.' -f1,2 /etc/alpine-release)/community/" >> /etc/apk/repositories
+
+# 设置工作目录
+WORKDIR /app
+
+COPY output/bin/libreoffice-api-linux-arm64 /app/libreoffice-api
+COPY .env /app/.env
+# 创建数据和临时目录
+RUN mkdir -p /app/data
+RUN mkdir -p /app/tmp
+
+# 设置卷
+VOLUME /app/data
+VOLUME /app/tmp
+
+# 设置环境变量
+ENV DEBUG=true
+ENV SOFFICE_PATH=/usr/bin/soffice
+ENV MAX_CONTENT_LENGTH=104857600
+ENV FILE_EXPIRY_HOURS=24
+
+# 暴露端口
+EXPOSE 15000 3000 3001
+
+# 启动服务
+CMD ["/app/libreoffice-api"] 

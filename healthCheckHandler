@@ -1,0 +1,19 @@
+package main
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
+
+func healthCheckHandler(c *gin.Context) {
+	response := HealthResponse{
+		Status:         "healthy",
+		LibreOffice:    libreofficeAvailable,
+		Version:        libreofficeVersion,
+		DataDir:        DATA_DIR,
+		FileExpiryHours: FILE_EXPIRY_HOURS,
+		Port:           PORT,
+	}
+	c.JSON(http.StatusOK, response)
+} 

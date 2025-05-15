@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -30,6 +31,7 @@ var (
 	BASE_DIR          string
 	TMP_DIR           string
 	DATA_DIR          string
+	PORT              string
 
 	libreofficeAvailable bool
 	libreofficeVersion   string
@@ -43,23 +45,33 @@ type APIConfig struct {
 	FileExpiryHours int    `json:"file_expiry_hours"`
 	DataDir         string `json:"data_dir"`
 	TmpDir          string `json:"tmp_dir"`
+	Port            string `json:"port"`
 }
 
 // InitConfig 初始化配置
 func InitConfig() {
 	// 加载.env文件
-	_ = godotenv.Load()
+	envErr := godotenv.Load()
+	if envErr != nil {
+		log.Printf("未找到.env文件或加载失败: %v", envErr)
+	} else {
+		log.Println("成功加载.env文件")
+	}
 
 	// 设置默认值并从环境变量获取配置
-	DEBUG = os.Getenv("DEBUG") != "false"
+	debugEnv := os.Getenv("DEBUG")
+	log.Printf("DEBUG环境变量值: %q", debugEnv)
+	DEBUG = debugEnv != "false"
 	
 	// 文件大小默认100MB
 	maxSizeStr := os.Getenv("MAX_CONTENT_LENGTH")
+	log.Printf("MAX_CONTENT_LENGTH环境变量值: %q", maxSizeStr)
 	if maxSizeStr == "" {
 		MAX_CONTENT_LENGTH = 100 * 1024 * 1024
 	} else {
 		maxSize, err := strconv.ParseInt(maxSizeStr, 10, 64)
 		if err != nil {
+			log.Printf("解析MAX_CONTENT_LENGTH出错: %v, 使用默认值", err)
 			MAX_CONTENT_LENGTH = 100 * 1024 * 1024
 		} else {
 			MAX_CONTENT_LENGTH = maxSize
@@ -68,37 +80,62 @@ func InitConfig() {
 
 	// LibreOffice 路径
 	SOFFICE_PATH = os.Getenv("SOFFICE_PATH")
+	log.Printf("SOFFICE_PATH环境变量值: %q", SOFFICE_PATH)
 	if SOFFICE_PATH == "" {
 		SOFFICE_PATH = "soffice"
+		log.Println("SOFFICE_PATH为空，使用默认值: soffice")
 	}
 
 	// 文件过期时间
 	fileExpiryStr := os.Getenv("FILE_EXPIRY_HOURS")
+	log.Printf("FILE_EXPIRY_HOURS环境变量值: %q", fileExpiryStr)
 	if fileExpiryStr == "" || fileExpiryStr == "-1" {
 		FILE_EXPIRY_HOURS = -1 // -1表示永不过期
+		log.Printf("FILE_EXPIRY_HOURS为空或-1，设置为永不过期: %d", FILE_EXPIRY_HOURS)
 	} else {
 		expiryHours, err := strconv.Atoi(fileExpiryStr)
 		if err != nil {
+			log.Printf("解析FILE_EXPIRY_HOURS出错: %v, 使用默认值24小时", err)
 			FILE_EXPIRY_HOURS = 24 // 默认24小时
 		} else {
 			FILE_EXPIRY_HOURS = expiryHours
+			log.Printf("成功设置FILE_EXPIRY_HOURS: %d", FILE_EXPIRY_HOURS)
 		}
+	}
+	
+	// 服务端口
+	PORT = os.Getenv("PORT")
+	log.Printf("PORT环境变量值: %q", PORT)
+	if PORT == "" {
+		PORT = "15000" // 默认端口
+		log.Printf("PORT为空，使用默认值: %s", PORT)
 	}
 
 	// 设置目录
-	BASE_DIR, _ = os.Getwd()
+	var err error
+	BASE_DIR, err = os.Getwd()
+	if err != nil {
+		log.Printf("获取当前工作目录失败: %v，使用./作为BASE_DIR", err)
+		BASE_DIR = "."
+	}
+	log.Printf("BASE_DIR: %s", BASE_DIR)
+	
 	TMP_DIR = filepath.Join(BASE_DIR, "tmp")
 	DATA_DIR = filepath.Join(BASE_DIR, "data")
 
 	// 创建必要的目录
-	os.MkdirAll(TMP_DIR, 0755)
-	os.MkdirAll(DATA_DIR, 0755)
+	if err := os.MkdirAll(TMP_DIR, 0755); err != nil {
+		log.Printf("创建临时目录失败: %v", err)
+	}
+	if err := os.MkdirAll(DATA_DIR, 0755); err != nil {
+		log.Printf("创建数据目录失败: %v", err)
+	}
 
 	// 检查LibreOffice是否可用
 	libreofficeAvailable, libreofficeVersion = checkLibreOffice()
 	
-	log.Printf("配置初始化完成: DEBUG=%v, MAX_CONTENT_LENGTH=%d, SOFFICE_PATH=%s, FILE_EXPIRY_HOURS=%d",
-		DEBUG, MAX_CONTENT_LENGTH, SOFFICE_PATH, FILE_EXPIRY_HOURS)
+	log.Printf("配置初始化完成: DEBUG=%v, MAX_CONTENT_LENGTH=%d, SOFFICE_PATH=%s, FILE_EXPIRY_HOURS=%d, PORT=%s",
+		DEBUG, MAX_CONTENT_LENGTH, SOFFICE_PATH, FILE_EXPIRY_HOURS, PORT)
 }
 
 // 检查LibreOffice是否可用
@@ -123,7 +160,11 @@ func startCleanupScheduler(ctx context.Context, wg *sync.WaitGroup) {
 
 	wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer func() {
+			log.Println("清理任务goroutine正在退出...")
+			wg.Done()
+		}()
+		
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
 
@@ -135,7 +176,7 @@ func startCleanupScheduler(ctx context.Context, wg *sync.WaitGroup) {
 				log.Println("开始执行文件清理任务")
 				cleanupExpiredFiles()
 			case <-ctx.Done():
-				log.Println("文件清理任务退出")
+				log.Println("文件清理任务收到取消信号，正在退出")
 				return
 			}
 		}
@@ -268,6 +309,148 @@ type HealthResponse struct {
 	Version        string `json:"version"`
 	DataDir        string `json:"data_dir"`
 	FileExpiryHours int    `json:"file_expiry_hours"`
+	Port           string `json:"port"`
+}
+
+// 辅助函数：复制文件
+func copyFile(src, dst string) error {
+	// 打开源文件
+	source, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("打开源文件失败: %w", err)
+	}
+	defer source.Close()
+	
+	// 创建目标文件
+	destination, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("创建目标文件失败: %w", err)
+	}
+	defer destination.Close()
+	
+	// 使用缓冲复制以提高性能
+	buf := make([]byte, 1024*1024) // 1MB缓冲区
+	_, err = io.CopyBuffer(destination, source, buf)
+	if err != nil {
+		return fmt.Errorf("复制文件内容失败: %w", err)
+	}
+	
+	// 确保所有数据都写入磁盘
+	err = destination.Sync()
+	if err != nil {
+		return fmt.Errorf("同步文件失败: %w", err)
+	}
+	
+	log.Printf("已将文件从 %s 复制到 %s", src, dst)
+	return nil
+}
+
+// 检测文件的MIME类型
+func detectMimeType(filePath string) string {
+	// 获取文件扩展名
+	ext := strings.ToLower(filepath.Ext(filePath))
+	
+	// 根据扩展名判断MIME类型
+	switch ext {
+	case ".pdf":
+		return "application/pdf"
+	case ".txt":
+		return "text/plain; charset=utf-8"
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".doc":
+		return "application/msword"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".xls":
+		return "application/vnd.ms-excel"
+	case ".pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	case ".ppt":
+		return "application/vnd.ms-powerpoint"
+	case ".odt":
+		return "application/vnd.oasis.opendocument.text"
+	case ".ods":
+		return "application/vnd.oasis.opendocument.spreadsheet"
+	case ".odp":
+		return "application/vnd.oasis.opendocument.presentation"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	case ".csv":
+		return "text/csv"
+	case ".rtf":
+		return "application/rtf"
+	case ".zip":
+		return "application/zip"
+	case ".xml":
+		return "application/xml"
+	case ".json":
+		return "application/json"
+	default:
+		// 对于未知类型，可以尝试使用文件的前几个字节来判断
+		file, err := os.Open(filePath)
+		if err != nil {
+			return "application/octet-stream" // 默认二进制流
+		}
+		defer file.Close()
+		
+		// 读取文件前512字节
+		buffer := make([]byte, 512)
+		_, err = file.Read(buffer)
+		if err != nil {
+			return "application/octet-stream"
+		}
+		
+		// 使用http包的DetectContentType函数
+		return http.DetectContentType(buffer)
+	}
+}
+
+// 验证输入文件格式是否支持
+func isValidInputFormat(fileExt string) bool {
+	// 支持的输入格式列表
+	supportedFormats := []string{
+		".doc", ".docx", ".wps", ".txt",
+		".html", ".htm",
+		".xml", ".pdf",
+	}
+	
+	for _, ext := range supportedFormats {
+		if ext == fileExt {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// 验证输出文件格式是否支持
+func isValidOutputFormat(format string) bool {
+	// 支持的输出格式列表
+	supportedFormats := []string{
+		"txt", "doc", "docx", "rtf", "odt",
+		"xls", "xlsx", "ods", "csv",
+		"ppt", "pptx", "odp",
+		"html", "htm",
+		"jpg", "jpeg", "png", "gif",
+		"xml", "json", "pdf",
+	}
+	
+	for _, fmt := range supportedFormats {
+		if fmt == format {
+			return true
+		}
+	}
+	
+	return false
 }
 
 func main() {
@@ -297,10 +480,21 @@ func main() {
 	router.GET("/", indexHandler)
 	router.GET("/health", healthCheckHandler)
 	router.POST("/convert", convertDocumentHandler)
-	router.GET("/download/:filename", downloadFileHandler)
+	router.GET("/download/*filename", func(c *gin.Context) {
+		// 去除前导的"/"字符
+		filename := c.Param("filename")
+		if strings.HasPrefix(filename, "/") {
+			filename = filename[1:]
+		}
+		c.Params = append(c.Params, gin.Param{
+			Key:   "filename",
+			Value: filename,
+		})
+		downloadFileHandler(c)
+	})
 	
 	// 启动服务器
-	log.Printf("启动服务: host=0.0.0.0, port=15000, debug=%v", DEBUG)
+	log.Printf("启动服务: host=0.0.0.0, port=%s, debug=%v", PORT, DEBUG)
 	log.Printf("文件存储目录: %s, 过期时间: %v 小时", DATA_DIR, 
 		func() interface{} {
 			if FILE_EXPIRY_HOURS <= 0 {
@@ -310,7 +504,7 @@ func main() {
 		}())
 	
 	server := &http.Server{
-		Addr:    ":15000",
+		Addr:    ":" + PORT,
 		Handler: router,
 	}
 	
@@ -332,19 +526,37 @@ func main() {
 	sig := <-quit
 	log.Printf("接收到退出信号: %v", sig)
 	
-	// 创建一个5秒超时的上下文
-	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// 取消上下文，通知所有使用此上下文的goroutine停止工作
+	cancel()
+	
+	// 创建一个5秒超时的上下文用于关闭服务器
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
 	
 	// 优雅地关闭服务器
 	log.Println("关闭服务器...")
-	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("服务器关闭异常: %v", err)
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("服务器关闭异常: %v", err)
 	}
 	
-	// 等待所有goroutine完成
+	// 等待所有goroutine完成，但设置最大等待时间
 	log.Println("等待清理任务完成...")
-	wg.Wait()
+	
+	// 创建一个通道来处理WaitGroup的等待超时
+	waitCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitCh)
+	}()
+	
+	// 设置3秒的最大等待时间
+	select {
+	case <-waitCh:
+		log.Println("所有清理任务已正常完成")
+	case <-time.After(3 * time.Second):
+		log.Println("等待清理任务超时，强制退出")
+	}
+	
 	log.Println("服务已完全关闭")
 }
 
@@ -451,6 +663,14 @@ func indexHandler(c *gin.Context) {
         <body>
             <h1>LibreOffice文档转换API</h1>
             <p>这是一个基于Go实现的文档转换API服务，可以将各种格式的文档转换为其他格式。</p>
+            环境变量
+			<pre>
+				DEBUG: 是否开启调试模式 <span id="debugValue">${DEBUG}</span>
+				MAX_CONTENT_LENGTH: 最大上传文件大小 <span id="maxContentLengthValue">${MAX_CONTENT_LENGTH}</span>
+				SOFFICE_PATH: LibreOffice安装路径 <span id="sofficePathValue">${SOFFICE_PATH}</span>
+				FILE_EXPIRY_HOURS: 文件过期时间 <span id="fileExpiryHoursValue">${FILE_EXPIRY_HOURS}</span>
+				PORT: 服务端口 <span id="portValue">${PORT}</span>
+			</pre>
             
             <div class="container">
                 <div class="api-doc">
@@ -504,7 +724,7 @@ func indexHandler(c *gin.Context) {
                     <pre>{
   "success": true,
   "filename": "原始文件名.docx",
-  "download_url": "http://localhost:15000/download/20231201/文件名_1701410000000.pdf",
+  "download_url": "http://localhost:${PORT}/download/20231201/文件名_1701410000000.pdf",
   "download_filename": "20231201/文件名_1701410000000.pdf",
   "expiry": "2023-12-02 10:00:00"
 }</pre>
@@ -648,6 +868,13 @@ func indexHandler(c *gin.Context) {
         </body>
     </html>
     `
+	
+	html = strings.ReplaceAll(html, "${DEBUG}", strconv.FormatBool(DEBUG))
+	html = strings.ReplaceAll(html, "${MAX_CONTENT_LENGTH}", strconv.Itoa(int(MAX_CONTENT_LENGTH)))
+	html = strings.ReplaceAll(html, "${SOFFICE_PATH}", SOFFICE_PATH)
+	html = strings.ReplaceAll(html, "${FILE_EXPIRY_HOURS}", strconv.Itoa(FILE_EXPIRY_HOURS))
+	html = strings.ReplaceAll(html, "${PORT}", PORT)
+	
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, html)
 }
@@ -660,28 +887,93 @@ func healthCheckHandler(c *gin.Context) {
 		Version:        libreofficeVersion,
 		DataDir:        DATA_DIR,
 		FileExpiryHours: FILE_EXPIRY_HOURS,
+		Port:           PORT,
 	}
 	c.JSON(http.StatusOK, response)
 }
 
 // 文件下载处理
 func downloadFileHandler(c *gin.Context) {
+	// 获取文件路径参数
 	filename := c.Param("filename")
-	parts := strings.Split(filename, "/")
+	log.Printf("接收到下载请求，路径: %s", filename)
 	
-	if len(parts) != 2 {
+	// 去除前导斜杠（如果有）
+	filename = strings.TrimPrefix(filename, "/")
+	
+	// 解码URL，处理可能的URL编码
+	decodedFilename, err := url.QueryUnescape(filename)
+	if err != nil {
+		log.Printf("URL解码失败: %v, 原始URL: %s", err, filename)
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "无效的文件路径格式"})
+		return
+	}
+	
+	// 安全检查：防止目录遍历攻击
+	if strings.Contains(decodedFilename, "..") || strings.Contains(decodedFilename, "\\") {
+		log.Printf("检测到潜在的安全问题: %s", decodedFilename)
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "无效的文件路径"})
 		return
 	}
 	
-	dateDir, fileName := parts[0], parts[1]
-	filePath := filepath.Join(DATA_DIR, dateDir, fileName)
-	
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		c.JSON(http.StatusNotFound, ErrorResponse{Error: "文件不存在"})
+	// 确保路径非空
+	if decodedFilename == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "未指定文件路径"})
 		return
 	}
 	
+	// 分析路径格式
+	parts := strings.Split(decodedFilename, "/")
+	
+	// 构建完整的文件系统路径
+	var filePath string
+	if len(parts) >= 2 {
+		// 如果包含至少一个斜杠，假设格式为dateDir/filename
+		dateDir, fileName := parts[0], parts[1]
+		filePath = filepath.Join(DATA_DIR, dateDir, fileName)
+		log.Printf("使用日期目录格式: %s/%s", dateDir, fileName)
+	} else {
+		// 否则视为直接的文件名
+		filePath = filepath.Join(DATA_DIR, decodedFilename)
+		log.Printf("使用直接文件名: %s", decodedFilename)
+	}
+	
+	// 检查文件是否存在
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("文件不存在: %s", filePath)
+			c.JSON(http.StatusNotFound, ErrorResponse{Error: "文件不存在"})
+		} else {
+			log.Printf("检查文件状态出错: %v", err)
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "文件访问错误"})
+		}
+		return
+	}
+	
+	// 确保不是目录
+	if fileInfo.IsDir() {
+		log.Printf("请求的路径是目录: %s", filePath)
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "无法下载目录"})
+		return
+	}
+	
+	// 获取文件名用于下载头
+	fileName := filepath.Base(filePath)
+	
+	// 检测MIME类型
+	mimeType := detectMimeType(filePath)
+	
+	// 设置响应头
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", fileName))
+	if mimeType != "" {
+		c.Header("Content-Type", mimeType)
+	}
+	
+	// 向日志记录成功的下载请求
+	log.Printf("提供文件下载: %s (大小: %d 字节, 类型: %s)", filePath, fileInfo.Size(), mimeType)
+	
+	// 发送文件
 	c.File(filePath)
 }
 
@@ -709,6 +1001,19 @@ func convertDocumentHandler(c *gin.Context) {
 		return
 	}
 	
+	// 获取原始文件名和扩展名
+	originalFilename := header.Filename
+	fileExt := strings.ToLower(filepath.Ext(originalFilename))
+	
+	// 验证文件类型
+	if !isValidInputFormat(fileExt) {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error: "不支持的输入文件格式",
+			Details: fmt.Sprintf("不支持将%s格式转换为其他格式", fileExt),
+		})
+		return
+	}
+	
 	// 获取转换格式，默认为txt
 	convertFormat := c.PostForm("format")
 	if convertFormat == "" {
@@ -718,17 +1023,20 @@ func convertDocumentHandler(c *gin.Context) {
 	// 从格式中提取扩展名
 	targetExt := strings.ToLower(strings.Split(convertFormat, ":")[0])
 	
-	log.Printf("使用转换格式: %s, 目标扩展名: %s", convertFormat, targetExt)
+	// 验证输出格式是否支持
+	if !isValidOutputFormat(targetExt) {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error: "不支持的输出格式",
+			Details: fmt.Sprintf("不支持转换为%s格式", targetExt),
+		})
+		return
+	}
 	
-	// 获取原始文件名和扩展名
-	originalFilename := header.Filename
-	fileExt := strings.ToLower(filepath.Ext(originalFilename))
+	log.Printf("文件转换: %s (%s) -> %s", originalFilename, fileExt, targetExt)
 	
 	// 使用唯一ID作为文件名，避免中文文件名问题
 	uniqueID := uuid.New().String()
 	safeFilename := fmt.Sprintf("%s%s", uniqueID, fileExt)
-	
-	log.Printf("接收到文件: %s, 使用安全文件名: %s", originalFilename, safeFilename)
 	
 	// 在tmp目录下创建一个新的子目录用于此次转换
 	workDir := filepath.Join(TMP_DIR, fmt.Sprintf("work_%s", uniqueID))
@@ -758,7 +1066,7 @@ func convertDocumentHandler(c *gin.Context) {
 		if err := os.RemoveAll(workDir); err != nil {
 			log.Printf("清理临时目录时出错: %v", err)
 		} else {
-			log.Printf("清理临时目录: %s", workDir)
+			log.Printf("已清理临时目录: %s", workDir)
 		}
 	}()
 	
@@ -767,231 +1075,96 @@ func convertDocumentHandler(c *gin.Context) {
 
 // 文件转换处理
 func convertFile(workDir, filePath, originalFilename, convertFormat, targetExt, uniqueID string, c *gin.Context) (interface{}, int) {
-	// 检查是否需要通过中间格式转换
-	needsIntermediateFormat := false
-	intermediateFormat := ""
-	fileExt := strings.ToLower(filepath.Ext(filePath))
+	// 直接使用LibreOffice进行格式转换
+	log.Printf("开始转换文件: %s 为 %s 格式", filePath, targetExt)
 	
-	// 特殊情况处理：PDF到TXT需要通过ODT中间格式
-	if fileExt == ".pdf" && targetExt == "txt" {
-		needsIntermediateFormat = true
-		intermediateFormat = "odt"
-		log.Printf("检测到PDF到TXT的转换，将使用中间格式ODT")
+	// 构建转换命令
+	convertCmd := []string{
+		"--headless",
+		"--convert-to",
+		convertFormat,
+		filePath,
+		"--outdir",
+		workDir,
 	}
 	
-	var outputPath string
+	log.Printf("执行转换命令: %s %s", SOFFICE_PATH, strings.Join(convertCmd, " "))
 	
-	// 如果需要中间转换
-	if needsIntermediateFormat {
-		// 第一步：转换为中间格式
-		intermediateCmd := []string{
-			"--headless",
-			"--convert-to",
-			intermediateFormat,
-			filePath,
-			"--outdir",
-			workDir,
-		}
-		
-		log.Printf("执行中间转换命令: %s %s", SOFFICE_PATH, strings.Join(intermediateCmd, " "))
-		
-		// 执行中间转换命令
-		cmd := exec.Command(SOFFICE_PATH, intermediateCmd...)
-		output, err := cmd.CombinedOutput()
-		outputStr := string(output)
-		log.Printf("中间转换命令输出: %s", outputStr)
-		
-		// 检查命令是否出错
-		if err != nil {
-			log.Printf("中间转换过程出错: %v, 输出: %s", err, outputStr)
-			return ErrorResponse{
-				Error:   "中间转换失败",
-				Details: fmt.Sprintf("%v: %s", err, outputStr),
-			}, http.StatusInternalServerError
-		}
-		
-		// 检查中间转换输出是否包含错误信息
-		if strings.Contains(outputStr, "Error:") || strings.Contains(outputStr, "error") || 
-		   strings.Contains(outputStr, "Failed") || strings.Contains(outputStr, "failed") ||
-		   strings.Contains(outputStr, "no export filter") {
-			log.Printf("中间转换过程有错误信息: %s", outputStr)
-			return ErrorResponse{
-				Error:   "中间转换失败",
-				Details: fmt.Sprintf("LibreOffice报告错误: %s", outputStr),
-			}, http.StatusInternalServerError
-		}
-		
-		// 找到中间格式文件
-		var intermediateFilePath string
-		files, err := os.ReadDir(workDir)
-		if err != nil {
-			return ErrorResponse{Error: fmt.Sprintf("读取工作目录失败: %v", err)}, http.StatusInternalServerError
-		}
-		
-		for _, f := range files {
-			fname := f.Name()
-			if strings.HasSuffix(strings.ToLower(fname), fmt.Sprintf(".%s", intermediateFormat)) &&
-			   fname != filepath.Base(filePath) {
-				intermediateFilePath = filepath.Join(workDir, fname)
-				log.Printf("找到中间格式文件: %s", intermediateFilePath)
-				break
-			}
-		}
-		
-		if intermediateFilePath == "" {
-			log.Printf("未找到中间格式文件")
-			return ErrorResponse{
-				Error:   "中间转换失败",
-				Details: "未找到中间格式文件",
-			}, http.StatusInternalServerError
-		}
-		
-		// 第二步：将中间格式转换为目标格式
-		finalCmd := []string{
-			"--headless",
-			"--convert-to",
-			convertFormat,
-			intermediateFilePath,
-			"--outdir",
-			workDir,
-		}
-		
-		log.Printf("执行最终转换命令: %s %s", SOFFICE_PATH, strings.Join(finalCmd, " "))
-		
-		// 执行最终转换命令
-		cmd = exec.Command(SOFFICE_PATH, finalCmd...)
-		output, err = cmd.CombinedOutput()
-		outputStr = string(output)
-		log.Printf("最终转换命令输出: %s", outputStr)
-		
-		// 检查命令是否出错
-		if err != nil {
-			log.Printf("最终转换过程出错: %v, 输出: %s", err, outputStr)
-			return ErrorResponse{
-				Error:   "最终转换失败",
-				Details: fmt.Sprintf("%v: %s", err, outputStr),
-			}, http.StatusInternalServerError
-		}
-		
-		// 检查最终转换输出是否包含错误信息
-		if strings.Contains(outputStr, "Error:") || strings.Contains(outputStr, "error") || 
-		   strings.Contains(outputStr, "Failed") || strings.Contains(outputStr, "failed") ||
-		   strings.Contains(outputStr, "no export filter") {
-			log.Printf("最终转换过程有错误信息: %s", outputStr)
-			return ErrorResponse{
-				Error:   "最终转换失败",
-				Details: fmt.Sprintf("LibreOffice报告错误: %s", outputStr),
-			}, http.StatusInternalServerError
-		}
-	} else {
-		// 使用LibreOffice将文件转换为指定格式
-		convertCmd := []string{
-			"--headless",
-			"--convert-to",
-			convertFormat,
-			filePath,
-			"--outdir",
-			workDir,
-		}
-		
-		log.Printf("执行转换命令: %s %s", SOFFICE_PATH, strings.Join(convertCmd, " "))
-		
-		// 执行转换命令
-		cmd := exec.Command(SOFFICE_PATH, convertCmd...)
-		output, err := cmd.CombinedOutput()
-		outputStr := string(output)
-		log.Printf("命令输出: %s", outputStr)
-		
-		// 检查命令是否出错
-		if err != nil {
-			log.Printf("转换过程出错: %v, 输出: %s", err, outputStr)
-			return ErrorResponse{
-				Error:   "文件转换失败",
-				Details: fmt.Sprintf("%v: %s", err, outputStr),
-			}, http.StatusInternalServerError
-		}
-		
-		// 即使命令返回成功，也检查输出中是否包含错误信息
-		if strings.Contains(outputStr, "Error:") || strings.Contains(outputStr, "error") || 
-		   strings.Contains(outputStr, "Failed") || strings.Contains(outputStr, "failed") ||
-		   strings.Contains(outputStr, "no export filter") {
-			log.Printf("转换过程有错误信息: %s", outputStr)
-			return ErrorResponse{
-				Error:   "文件转换失败",
-				Details: fmt.Sprintf("LibreOffice报告错误: %s", outputStr),
-			}, http.StatusInternalServerError
-		}
+	// 执行转换命令
+	cmd := exec.Command(SOFFICE_PATH, convertCmd...)
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+	
+	// 检查命令是否出错
+	if err != nil {
+		log.Printf("转换过程出错: %v, 输出: %s", err, outputStr)
+		return ErrorResponse{
+			Error:   "文件转换失败",
+			Details: fmt.Sprintf("%v: %s", err, outputStr),
+		}, http.StatusInternalServerError
 	}
 	
-	// 列出目录中的所有文件
+	// 检查输出中是否包含错误信息
+	if strings.Contains(outputStr, "Error:") || strings.Contains(outputStr, "error") || 
+	   strings.Contains(outputStr, "Failed") || strings.Contains(outputStr, "failed") ||
+	   strings.Contains(outputStr, "no export filter") {
+		log.Printf("转换过程有错误信息: %s", outputStr)
+		return ErrorResponse{
+			Error:   "文件转换失败",
+			Details: fmt.Sprintf("LibreOffice报告错误: %s", outputStr),
+		}, http.StatusInternalServerError
+	}
+	
+	// 列出工作目录中的所有文件
 	files, err := os.ReadDir(workDir)
 	if err != nil {
 		return ErrorResponse{Error: fmt.Sprintf("读取工作目录失败: %v", err)}, http.StatusInternalServerError
 	}
 	
+	// 记录所有文件用于调试
 	var allFiles []string
 	for _, f := range files {
 		allFiles = append(allFiles, f.Name())
 	}
-	log.Printf("工作目录中的所有文件: %v", allFiles)
 	
-	// 获取输入文件的基本名称（不含路径和扩展名）
-	baseInputFilename := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
-	log.Printf("基本输入文件名: %s", baseInputFilename)
+	// 查找转换后的输出文件
+	var outputPath string
 	
-	// 尝试查找转换后的文件
-	outputPath = ""
-	
-	// 查找目标扩展名的文件，但不是原始输入文件
-	for _, file := range allFiles {
-		// 检查文件是否有目标扩展名
-		if strings.HasSuffix(strings.ToLower(file), fmt.Sprintf(".%s", targetExt)) {
-			// 检查这不是原始输入文件（如果扩展名相同）
-			if file != filepath.Base(filePath) {
-				outputPath = filepath.Join(workDir, file)
-				log.Printf("找到输出文件: %s", outputPath)
-				break
-			}
+	for _, file := range files {
+		fileName := file.Name()
+		// 检查文件是否有目标扩展名，且不是原始输入文件
+		if strings.HasSuffix(strings.ToLower(fileName), fmt.Sprintf(".%s", targetExt)) &&
+		   fileName != filepath.Base(filePath) {
+			outputPath = filepath.Join(workDir, fileName)
+			log.Printf("找到转换后的文件: %s", outputPath)
+			break
 		}
 	}
 	
-	// 如果仍然没有找到输出文件，则报错
+	// 如果没有找到输出文件，返回错误
 	if outputPath == "" {
-		// 提供更具体的错误信息
-		errorDetails := fmt.Sprintf("在工作目录中未找到以 .%s 结尾的转换输出文件。这可能由于以下原因：\n", targetExt)
-		errorDetails += "1. 当前文件格式不支持转换到请求的目标格式\n"
-		errorDetails += "2. 源文件可能已损坏或格式不兼容\n"
-		errorDetails += "3. LibreOffice未能正确执行转换过程\n"
+		errorDetails := fmt.Sprintf("在工作目录中未找到以 .%s 结尾的转换输出文件。可能的原因:\n", targetExt)
+		errorDetails += "1. 文件格式不支持转换到目标格式\n"
+		errorDetails += "2. 文件可能已损坏或格式不兼容\n"
+		errorDetails += "3. LibreOffice未能正确执行转换\n"
 		
+		log.Printf("未找到输出文件。工作目录中的文件: %v", allFiles)
 		return ErrorResponse{
 			Error:   "转换后的文件未找到",
-			Details: errorDetails + fmt.Sprintf("工作目录中的文件: %v", allFiles),
+			Details: errorDetails,
 		}, http.StatusInternalServerError
 	}
-	
-	log.Printf("转换后的输出文件路径: %s", outputPath)
 	
 	// 生成持久化存储路径
 	finalOutputPath, relativePath := generateOutputFilepath(originalFilename, targetExt)
 	
-	// 将文件从临时目录复制到持久化存储目录
-	src, err := os.Open(outputPath)
-	if err != nil {
-		return ErrorResponse{Error: fmt.Sprintf("打开输出文件失败: %v", err)}, http.StatusInternalServerError
+	// 将转换后的文件从临时目录复制到持久化存储目录
+	if err := copyFile(outputPath, finalOutputPath); err != nil {
+		return ErrorResponse{
+			Error:   "保存文件失败",
+			Details: fmt.Sprintf("无法将文件复制到最终位置: %v", err),
+		}, http.StatusInternalServerError
 	}
-	defer src.Close()
-	
-	dst, err := os.Create(finalOutputPath)
-	if err != nil {
-		return ErrorResponse{Error: fmt.Sprintf("创建持久化文件失败: %v", err)}, http.StatusInternalServerError
-	}
-	defer dst.Close()
-	
-	if _, err = io.Copy(dst, src); err != nil {
-		return ErrorResponse{Error: fmt.Sprintf("复制文件失败: %v", err)}, http.StatusInternalServerError
-	}
-	
-	log.Printf("已将文件复制到持久化存储目录: %s", finalOutputPath)
 	
 	// 生成下载URL
 	scheme := "http"
@@ -999,7 +1172,10 @@ func convertFile(workDir, filePath, originalFilename, convertFormat, targetExt, 
 		scheme = "https"
 	}
 	host := c.Request.Host
-	downloadURL := fmt.Sprintf("%s://%s/download/%s", scheme, host, relativePath)
+	
+	// 构建下载URL（确保路径格式正确）
+	cleanRelativePath := strings.TrimPrefix(relativePath, "/")
+	downloadURL := fmt.Sprintf("%s://%s/download/%s", scheme, host, cleanRelativePath)
 	
 	// 计算过期时间
 	var expiryInfo string
@@ -1010,7 +1186,7 @@ func convertFile(workDir, filePath, originalFilename, convertFormat, targetExt, 
 		expiryInfo = "永不过期"
 	}
 	
-	// 构建响应
+	// 构建响应对象
 	response := ConversionResponse{
 		Success:         true,
 		Filename:        originalFilename,
@@ -1019,15 +1195,17 @@ func convertFile(workDir, filePath, originalFilename, convertFormat, targetExt, 
 		Expiry:          expiryInfo,
 	}
 	
-	// 如果输出是文本格式，则读取文本内容
+	// 如果输出是文本格式，读取文本内容
 	if targetExt == "txt" {
 		textBytes, err := os.ReadFile(finalOutputPath)
 		if err == nil {
 			response.Text = string(textBytes)
+			log.Printf("已读取文本内容，长度: %d 字节", len(response.Text))
 		} else {
 			log.Printf("读取文本内容失败: %v", err)
 		}
 	}
 	
+	log.Printf("转换完成: %s -> %s, 下载URL: %s", originalFilename, targetExt, downloadURL)
 	return response, http.StatusOK
 } 

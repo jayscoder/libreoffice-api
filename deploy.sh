@@ -1,8 +1,5 @@
 #!/bin/bash
 cd "$(dirname "$0")"
-
-ARCH=${1:-"amd64"}
-
 # 检测 docker compose 命令格式
 if docker compose version &>/dev/null; then
     DOCKER_COMPOSE="docker compose"
@@ -18,7 +15,7 @@ $DOCKER_COMPOSE down
 docker rm -f libreoffice-api:latest
 
 # 加载镜像
-docker load < output/libreoffice-api-linux_${ARCH}.tar.gz
+docker load < libreoffice-api.tar.gz
 
 # 运行容器
 $DOCKER_COMPOSE up -d

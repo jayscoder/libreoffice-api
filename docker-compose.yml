@@ -12,6 +12,7 @@ services:
       - MAX_CONTENT_LENGTH=104857600
       - SOFFICE_PATH=soffice
       - FILE_EXPIRY_HOURS=24
+      - PORT=15000
     volumes:
       - libreoffice_tmp:/app/tmp
       - libreoffice_data:/app/data
