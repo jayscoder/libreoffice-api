@@ -1,6 +1,6 @@
 services:
   libreoffice-api:
-    image: libreoffice-api:latest
+    image: tongmu/libreoffice-api:latest
     container_name: libreoffice-api
     restart: unless-stopped
     ports:

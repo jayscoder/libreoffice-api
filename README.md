@@ -9,6 +9,21 @@
 - 文档转换后提供下载链接
 - 支持配置文件保存期限，自动清理过期文件
 
+## 快速开始（使用 Docker）
+
+可以直接使用 DockerHub 上的镜像快速部署：
+
+```bash
+# 拉取镜像
+docker pull tongmu/libreoffice-api:latest
+
+# 使用 docker-compose 运行
+curl -O https://raw.githubusercontent.com/用户名/libreoffice-api/main/docker-compose.yml
+docker-compose up -d
+```
+
+服务将在 http://localhost:15000 上运行。
+
 ## 环境变量配置
 
 服务支持通过环境变量进行配置，支持的环境变量包括：
@@ -26,6 +41,16 @@
 1. 在项目根目录创建`.env`文件（推荐，项目提供了`env.sample`作为模板）
 2. 直接在命令行设置环境变量，例如：`PORT=8080 DEBUG=false ./libreoffice-api`
 3. 在 Docker Compose 配置文件中设置
+
+## Docker 镜像
+
+本项目提供了官方 Docker 镜像，可在 DockerHub 上获取：
+
+- **镜像地址**：[tongmu/libreoffice-api](https://hub.docker.com/r/tongmu/libreoffice-api)
+- **标签**：
+  - `latest`: 最新版本
+  - `v1.0.0`: 1.0.0 稳定版
+  - `v1.0.0-amd64`: 1.0.0 版本 (AMD64 架构)
 
 ## 构建和运行
 
